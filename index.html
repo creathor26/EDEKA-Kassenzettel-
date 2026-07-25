@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Kassenzähler</title>
+<style>
+  :root{
+    --paper:#f7f3ea;
+    --paper-line:#e2d9c4;
+    --ink:#20261f;
+    --ink-soft:#6b6255;
+    --green:#2f4d34;
+    --green-deep:#1c3020;
+    --brass:#a5793a;
+    --red:#a3352b;
+    --white:#fffdf8;
+  }
+  *{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body{
+    margin:0; padding:0;
+    background:var(--paper);
+    color:var(--ink);
+    font-family: ui-serif, Georgia, "Iowan Old Style", serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .mono{ font-family: ui-monospace, "SF Mono", Menlo, monospace; font-variant-numeric: tabular-nums; }
+
+  header{
+    padding: 22px 18px 14px;
+    border-bottom: 1px solid var(--paper-line);
+    background: var(--paper);
+    position: sticky;
+    top: 0;
+    z-index: 5;
+  }
+  header h1{
+    margin:0;
+    font-size: 21px;
+    letter-spacing: 0.02em;
+    color: var(--green-deep);
+    font-weight: 700;
+  }
+  header .sub{
+    margin-top:4px;
+    font-size:12.5px;
+    color: var(--ink-soft);
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+
+  main{ padding: 4px 14px 190px; max-width: 560px; margin: 0 auto; }
+
+  .section{
+    margin-top: 22px;
+  }
+  .section-title{
+    display:flex; align-items:baseline; justify-content:space-between;
+    padding: 4px 4px 8px;
+    border-bottom: 1.5px solid var(--green-deep);
+  }
+  .section-title h2{
+    margin:0;
+    font-size: 15px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--green-deep);
+  }
+  .section-title .subtotal{
+    font-size: 15px;
+    font-weight:600;
+    color: var(--green-deep);
+  }
+
+  table{ width:100%; border-collapse: collapse; }
+  tr.row{ border-bottom: 1px solid var(--paper-line); }
+  tr.row td{ padding: 9px 4px; vertical-align: middle; }
+  td.denom{
+    width: 34%;
+    font-size: 15.5px;
+    font-weight: 600;
+  }
+  td.denom .unitval{
+    display:block;
+    font-size: 11.5px;
+    font-weight: 400;
+    color: var(--ink-soft);
+  }
+  td.count{ width: 30%; }
+  td.linesum{
+    width: 36%;
+    text-align: right;
+    font-size: 15px;
+    color: var(--ink);
+  }
+
+  input.count-input{
+    width: 100%;
+    font-size: 17px;
+    padding: 7px 8px;
+    border: 1px solid var(--paper-line);
+    border-radius: 6px;
+    background: var(--white);
+    color: var(--ink);
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    text-align: center;
+  }
+  input.count-input:focus{
+    outline: none;
+    border-color: var(--green);
+    box-shadow: 0 0 0 2px rgba(47,77,52,0.15);
+  }
+
+  .footer{
+    position: fixed;
+    bottom: 0; left: 0; right: 0;
+    background: var(--green-deep);
+    color: var(--white);
+    padding: 12px 16px calc(14px + env(safe-area-inset-bottom));
+    box-shadow: 0 -4px 14px rgba(0,0,0,0.18);
+    z-index: 10;
+  }
+  .footer-inner{ max-width: 560px; margin:0 auto; }
+  .footer-row{
+    display:flex; justify-content:space-between; align-items:baseline;
+    padding: 3px 0;
+    font-size: 14px;
+  }
+  .footer-row.total{
+    font-size: 17px;
+    font-weight: 700;
+    border-top: 1px solid rgba(255,255,255,0.25);
+    margin-top: 4px;
+    padding-top: 7px;
+  }
+  .footer-row .lbl{ color: rgba(255,253,248,0.75); }
+  .footer-row.total .lbl{ color: var(--white); }
+  .diff-ok{ color: #b9e3a8; }
+  .diff-over{ color: #f4d58d; }
+  .diff-under{ color: #f3a89a; }
+
+  .actions{
+    display:flex; gap:10px; margin-top:26px; padding: 0 4px;
+  }
+  button.reset{
+    flex:1;
+    padding: 11px;
+    font-size: 13.5px;
+    letter-spacing:0.03em;
+    text-transform: uppercase;
+    border: 1px solid var(--brass);
+    background: transparent;
+    color: var(--brass);
+    border-radius: 6px;
+    font-family: inherit;
+  }
+  button.reset:active{ background: rgba(165,121,58,0.12); }
+
+  .note{
+    margin-top:26px;
+    padding: 0 4px;
+    font-size: 12px;
+    color: var(--ink-soft);
+    line-height:1.5;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Kassenzählprotokoll</h1>
+  <div class="sub" id="dateline">—</div>
+</header>
+
+<main>
+
+  <div class="section" id="section-rollen">
+    <div class="section-title">
+      <h2>a) Rollengeld</h2>
+      <span class="subtotal mono" id="sum-rollen">0,00 €</span>
+    </div>
+    <table><tbody id="body-rollen"></tbody></table>
+  </div>
+
+  <div class="section" id="section-klein">
+    <div class="section-title">
+      <h2>b) Kleingeld</h2>
+      <span class="subtotal mono" id="sum-klein">0,00 €</span>
+    </div>
+    <table><tbody id="body-klein"></tbody></table>
+  </div>
+
+  <div class="section" id="section-scheine">
+    <div class="section-title">
+      <h2>b) Papiergeld</h2>
+      <span class="subtotal mono" id="sum-scheine">0,00 €</span>
+    </div>
+    <table><tbody id="body-scheine"></tbody></table>
+  </div>
+
+  <div class="actions">
+    <button class="reset" id="btn-reset">Alle Felder zurücksetzen</button>
+  </div>
+
+  <div class="note">
+    Soll-Kassenbestand: 700,00 € inkl. Rollengeld. Anzahl je Nennwert eingeben, Summen werden automatisch berechnet.
+  </div>
+
+</main>
+
+<div class="footer">
+  <div class="footer-inner">
+    <div class="footer-row"><span class="lbl">Rollengeld (a)</span><span class="mono" id="f-rollen">0,00 €</span></div>
+    <div class="footer-row"><span class="lbl">Kleingeld + Scheine (b)</span><span class="mono" id="f-b">0,00 €</span></div>
+    <div class="footer-row total"><span class="lbl">Ist-Bestand</span><span class="mono" id="f-ist">0,00 €</span></div>
+    <div class="footer-row"><span class="lbl">Soll-Bestand</span><span class="mono">700,00 €</span></div>
+    <div class="footer-row total"><span class="lbl">Differenz</span><span class="mono" id="f-diff">0,00 €</span></div>
+  </div>
+</div>
+
+<script>
+  const SOLL = 700.00;
+
+  // aufsteigend: kleinste Einheit oben, größer werdend nach unten
+  const rollen = [
+    { label: "1 Cent",  unit: "Rolle à 50 Stk.", value: 0.50 },
+    { label: "2 Cent",  unit: "Rolle à 50 Stk.", value: 1.00 },
+    { label: "5 Cent",  unit: "Rolle à 50 Stk.", value: 2.50 },
+    { label: "10 Cent", unit: "Rolle à 40 Stk.", value: 4.00 },
+    { label: "20 Cent", unit: "Rolle à 40 Stk.", value: 8.00 },
+    { label: "50 Cent", unit: "Rolle à 40 Stk.", value: 20.00 },
+    { label: "1 Euro",  unit: "Rolle à 25 Stk.", value: 25.00 },
+    { label: "2 Euro",  unit: "Rolle à 25 Stk.", value: 50.00 },
+  ];
+
+  const klein = [
+    { label: "1 Cent",  unit: "je Stück", value: 0.01 },
+    { label: "2 Cent",  unit: "je Stück", value: 0.02 },
+    { label: "5 Cent",  unit: "je Stück", value: 0.05 },
+    { label: "10 Cent", unit: "je Stück", value: 0.10 },
+    { label: "20 Cent", unit: "je Stück", value: 0.20 },
+    { label: "50 Cent", unit: "je Stück", value: 0.50 },
+    { label: "1 Euro",  unit: "je Stück", value: 1.00 },
+    { label: "2 Euro",  unit: "je Stück", value: 2.00 },
+  ];
+
+  const scheine = [
+    { label: "5 Euro",   unit: "je Schein", value: 5.00 },
+    { label: "10 Euro",  unit: "je Schein", value: 10.00 },
+    { label: "20 Euro",  unit: "je Schein", value: 20.00 },
+    { label: "50 Euro",  unit: "je Schein", value: 50.00 },
+    { label: "100 Euro", unit: "je Schein", value: 100.00 },
+  ];
+
+  function fmt(n){
+    return n.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " €";
+  }
+
+  function buildRows(list, tbodyId, prefix){
+    const tbody = document.getElementById(tbodyId);
+    list.forEach((item, i) => {
+      const tr = document.createElement('tr');
+      tr.className = 'row';
+      tr.innerHTML = `
+        <td class="denom">${item.label}<span class="unitval">${item.unit} · ${fmt(item.value)}</span></td>
+        <td class="count"><input class="count-input" type="text" inputmode="numeric" pattern="[0-9]*" placeholder="0" id="${prefix}-input-${i}"></td>
+        <td class="linesum mono" id="${prefix}-linesum-${i}">0,00 €</td>
+      `;
+      tbody.appendChild(tr);
+    });
+  }
+
+  buildRows(rollen, 'body-rollen', 'r');
+  buildRows(klein, 'body-klein', 'k');
+  buildRows(scheine, 'body-scheine', 's');
+
+  function calcGroup(list, prefix){
+    let sum = 0;
+    list.forEach((item, i) => {
+      const input = document.getElementById(`${prefix}-input-${i}`);
+      const n = parseInt(input.value, 10);
+      const count = isNaN(n) || n < 0 ? 0 : n;
+      const lineSum = count * item.value;
+      sum += lineSum;
+      document.getElementById(`${prefix}-linesum-${i}`).textContent = fmt(lineSum);
+    });
+    return sum;
+  }
+
+  function recalc(){
+    const sumRollen = calcGroup(rollen, 'r');
+    const sumKlein = calcGroup(klein, 'k');
+    const sumScheine = calcGroup(scheine, 's');
+    const sumB = sumKlein + sumScheine;
+    const ist = sumRollen + sumB;
+    const diff = ist - SOLL;
+
+    document.getElementById('sum-rollen').textContent = fmt(sumRollen);
+    document.getElementById('sum-klein').textContent = fmt(sumKlein);
+    document.getElementById('sum-scheine').textContent = fmt(sumScheine);
+
+    document.getElementById('f-rollen').textContent = fmt(sumRollen);
+    document.getElementById('f-b').textContent = fmt(sumB);
+    document.getElementById('f-ist').textContent = fmt(ist);
+
+    const diffEl = document.getElementById('f-diff');
+    const sign = diff > 0 ? "+" : "";
+    diffEl.textContent = sign + fmt(diff);
+    diffEl.classList.remove('diff-ok','diff-over','diff-under');
+    if (Math.abs(diff) < 0.005) diffEl.classList.add('diff-ok');
+    else if (diff > 0) diffEl.classList.add('diff-over');
+    else diffEl.classList.add('diff-under');
+  }
+
+  document.addEventListener('input', (e) => {
+    if (e.target.classList.contains('count-input')){
+      e.target.value = e.target.value.replace(/[^0-9]/g, '');
+      recalc();
+    }
+  });
+
+  document.getElementById('btn-reset').addEventListener('click', () => {
+    document.querySelectorAll('.count-input').forEach(inp => inp.value = '');
+    recalc();
+  });
+
+  function setDate(){
+    const now = new Date();
+    const opts = { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric' };
+    const dateStr = now.toLocaleDateString('de-DE', opts);
+    const timeStr = now.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+    document.getElementById('dateline').textContent = `${dateStr} · ${timeStr} Uhr`;
+  }
+  setDate();
+  recalc();
+</script>
+
+</body>
+</html>
