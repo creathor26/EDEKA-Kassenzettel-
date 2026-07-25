@@ -243,7 +243,7 @@
     <div class="section-title">
       <h2>Entnahme-Vorschlag</h2>
     </div>
-    <div class="section-hint">Welche Scheine im Kassenbestand bleiben und welche zur Bank/Tresor abgeführt werden, um inkl. Rollen- und Kleingeld genau 700,00 € zu behalten.</div>
+    <div class="section-hint">Welche Scheine im Kassenbestand bleiben und welche zur Bank/Tresor abgeführt werden, um inkl. Rollen- und Kleingeld genau 700,00 € zu behalten. Vorgabe: keine 100 €-Note, max. 3× 50 €, max. 15 Scheine je übriger Sorte, möglichst gleichmäßig verteilt.</div>
     <table class="entnahme">
       <thead>
         <tr>
@@ -309,11 +309,11 @@
   ];
 
   const scheine = [
-    { label: "5 Euro",   unit: "je Schein", value: 5.00 },
-    { label: "10 Euro",  unit: "je Schein", value: 10.00 },
-    { label: "20 Euro",  unit: "je Schein", value: 20.00 },
-    { label: "50 Euro",  unit: "je Schein", value: 50.00 },
-    { label: "100 Euro", unit: "je Schein", value: 100.00 },
+    { label: "5 Euro",   unit: "je Schein", value: 5.00,   maxKeep: 15 },
+    { label: "10 Euro",  unit: "je Schein", value: 10.00,  maxKeep: 15 },
+    { label: "20 Euro",  unit: "je Schein", value: 20.00,  maxKeep: 15 },
+    { label: "50 Euro",  unit: "je Schein", value: 50.00,  maxKeep: 3 },
+    { label: "100 Euro", unit: "je Schein", value: 100.00, maxKeep: 0 },
   ];
 
   function fmt(n){
@@ -391,6 +391,9 @@
       status = { type: 'under', msg: `Nicht genug Papiergeld gezählt, um 700,00 € zu erreichen. Es fehlen ${fmt(target - totalNotesAvail)} — Kasse muss vor Schließung aufgefüllt werden.` };
     }
 
+    // Betriebliche Vorgaben: keine 100€-Note behalten, max. 3x 50€, max. 15 Scheine je übriger Sorte
+    const maxKeepFor = [15, 15, 15, 3, 0]; // Reihenfolge wie scheine[]: 5, 10, 20, 50, 100
+
     // Ausbalancierte Verteilung: pro Nennwert möglichst 50-100 € in der Kasse belassen,
     // statt alles in großen Scheinen zu konzentrieren (bessere Wechselgeld-Fähigkeit).
     const SOFT_CAP = 100; // weiches Limit je Nennwert in €
@@ -404,7 +407,7 @@
 
       let candidates = scheine
         .map((item, i) => i)
-        .filter(i => scheine[i].value <= remaining + 0.001 && keep[i] < counts[i]);
+        .filter(i => scheine[i].value <= remaining + 0.001 && keep[i] < counts[i] && keep[i] < maxKeepFor[i]);
 
       if (candidates.length === 0) break;
 
@@ -426,9 +429,14 @@
     const remove = scheine.map((item, i) => counts[i] - keep[i]);
     const keptSum = scheine.reduce((s, item, i) => s + keep[i] * item.value, 0);
     const removeSum = scheine.reduce((s, item, i) => s + remove[i] * item.value, 0);
+    const maxKeepable = scheine.reduce((s, item, i) => s + Math.min(counts[i], maxKeepFor[i]) * item.value, 0);
 
     if (status.type === 'ok' && remaining > 0.005 && target > 0){
-      status = { type: 'warn', msg: `Zielbetrag ${fmt(target)} lässt sich mit den gezählten Scheinen nicht exakt bilden (Restdifferenz ${fmt(remaining)} — im Kleingeldbestand bereits erfasst).` };
+      if (maxKeepable < target - 0.005){
+        status = { type: 'warn', msg: `Mit den Vorgaben (keine 100 €, max. 3× 50 €, max. 15 Scheine je übriger Sorte) können höchstens ${fmt(maxKeepable)} in der Kasse gehalten werden — ${fmt(target - maxKeepable)} weniger als für 700 € nötig. Differenz über Rollen-/Kleingeld ausgleichen oder Limits anpassen.` };
+      } else {
+        status = { type: 'warn', msg: `Zielbetrag ${fmt(target)} lässt sich mit den gezählten Scheinen nicht exakt bilden (Restdifferenz ${fmt(remaining)} — im Kleingeldbestand bereits erfasst).` };
+      }
     } else if (status.type === 'ok'){
       status = { type: 'ok', msg: `${fmt(keptSum)} Papiergeld bleiben in der Kasse, ${fmt(removeSum)} werden zur Bank/Tresor abgeführt.` };
     }
