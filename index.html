@@ -202,7 +202,7 @@
 
   @media print{
     header, .footer, .actions, .section-hint, .entnahme-status { display:none !important; }
-    .section#section-rollen, .section#section-klein, .section#section-scheine, .section#section-entnahme,
+    .section#section-rollen, .section#section-klein, .section#section-scheine, .section#section-dkk, .section#section-entnahme,
     input.count-input { display:none !important; }
     main{ padding: 0; max-width: 100%; }
     body{ background: #fff; }
@@ -280,11 +280,24 @@
     <table><tbody id="body-scheine"></tbody></table>
   </div>
 
+  <div class="section" id="section-dkk">
+    <div class="section-title">
+      <h2>c) Fremdwährung (DKK)</h2>
+    </div>
+    <div class="section-hint">Eingenommene dänische Kronen werden nicht auf den 700-€-Bestand angerechnet und immer vollständig entnommen.</div>
+    <table><tbody>
+      <tr class="row">
+        <td class="denom">Dänische Kronen<span class="unitval">Gesamtbetrag</span></td>
+        <td class="count"><input class="count-input dkk-input" type="text" inputmode="decimal" placeholder="0" id="dkk-input"></td>
+        <td class="linesum mono" id="dkk-linesum">0,00 kr.</td>
+      </tr>
+    </tbody></table>
+  </div>
+
   <div class="section" id="section-entnahme">
     <div class="section-title">
       <h2>Entnahme-Vorschlag <span id="entnahme-kasse-label"></span></h2>
     </div>
-    <div class="section-hint">Welche Scheine in der Kasse bleiben und welche als Gewinn entnommen werden, um inkl. Rollen- und Kleingeld möglichst genau 700,00 € zu behalten. Vorgabe: keine 100 €-Note, max. 3× 50 €, mind. 15× 5 € als Wechselgeld-Reserve (plus ggf. 1 weitere zum Aufrunden), 10€/20€ dazu in etwa im gleichen Verhältnis abgestuft wie 5€ zu 10€.</div>
     <table class="entnahme">
       <thead>
         <tr>
@@ -304,6 +317,7 @@
     <button class="btn" id="btn-reset">Alle Felder zurücksetzen</button>
   </div>
 
+
   <div class="note">
     Soll-Kassenbestand: 700,00 € inkl. Rollengeld. Anzahl je Nennwert eingeben, Summen werden automatisch berechnet. Beim PDF-Export öffnet sich die iOS-Druckvorschau — dort über das Teilen-Symbol „In Dateien sichern“ oder „PDF speichern“ wählen.
   </div>
@@ -319,6 +333,8 @@
     <div class="footer-row total"><span class="lbl" id="f-gewinn-label">Gewinn Kasse 1</span><span class="mono" id="f-diff">0,00 €</span></div>
     <div class="footer-row sub" id="f-kleingeld-row"><span class="lbl">davon Kleingeld-Entnahme</span><span class="mono" id="f-kleingeld-ueberschuss">0,00 €</span></div>
     <div class="footer-row sub"><span class="lbl">davon Papiergeld-Entnahme</span><span class="mono" id="f-papier-entnahme">0,00 €</span></div>
+    <div class="footer-row total" style="margin-top:8px;"><span class="lbl">Kassenbestand nach Entnahme</span><span class="mono" id="f-kontrolle">0,00 €</span></div>
+    <div class="footer-row sub" id="f-dkk-row" style="display:none;"><span class="lbl">DKK-Entnahme (Fremdwährung)</span><span class="mono" id="f-dkk">0,00 kr.</span></div>
   </div>
 </div>
 
@@ -359,17 +375,28 @@
     { label: "20 Euro",  unit: "je Schein", value: 20.00 },
     { label: "50 Euro",  unit: "je Schein", value: 50.00 },
     { label: "100 Euro", unit: "je Schein", value: 100.00 },
+    { label: "200 Euro", unit: "je Schein", value: 200.00 },
   ];
 
-  // Betriebliche Vorgaben fuer den "Bleibt"-Bestand: keine 100er, max. 3x 50er,
+  // Betriebliche Vorgaben fuer den "Bleibt"-Bestand: keine 100er/200er, max. 3x 50er,
   // 5er-Reserve mindestens 15 (weicher Cap 25 als Sicherheitsgrenze).
   const BASELINE_5 = 15;
   const MAX_5 = 25;
   const MAX_50 = 3;
-  const maxKeepFor = [MAX_5, 15, 15, MAX_50, 0]; // 5, 10, 20, 50, 100
+  const maxKeepFor = [MAX_5, 15, 15, MAX_50, 0, 0]; // 5, 10, 20, 50, 100, 200
 
   function fmt(n){
     return n.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " €";
+  }
+
+  function fmtKr(n){
+    return n.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " kr.";
+  }
+
+  function getDkkAmount(){
+    const input = document.getElementById('dkk-input');
+    const raw = parseFloat((input.value || '').replace(',', '.'));
+    return isNaN(raw) || raw < 0 ? 0 : raw;
   }
 
   function buildRows(list, tbodyId, prefix){
@@ -423,8 +450,13 @@
   // Verteilt effectiveTarget auf 5/10/20/50 Scheine:
   // - max. 3x 50€, keine 100er
   // - 5€ als Basis-Reserve (mind. 15, sofern vorhanden/nötig), plus ggf. weitere zum Aufrunden
-  // - 10€/20€ proportional zueinander gestaffelt (Verhältnis 5:10 ≈ 10:20)
-  // - schließt nie mit einer Lücke: bei Bedarf zusätzliche 5€-Note(n), Überschuss dann < 5€
+  // - 10€/20€ proportional zueinander gestaffelt (Verhältnis 5:10 ≈ 10:20) — nur wenn genug 5er als
+  //   verlässlicher Anker vorhanden sind; sonst werden 10€/20€ ausgewogen aufgefüllt (kein Ratio-Zwang)
+  // - schließt nie mit einer Lücke: reicht die 5€-Reserve nicht (z.B. wenig 5er im Bestand), wird auf
+  //   die nächstgrößere verfügbare Note ausgewichen; die exakte Feinjustierung auf 700,00 € übernimmt
+  //   anschließend die Kleingeld-Entnahme (siehe calcEntnahme)
+  const noteValues = scheine.map(s => s.value);
+
   function distributeKeep(counts, effectiveTarget){
     let count50 = Math.min(MAX_50, counts[3], Math.floor((effectiveTarget + 0.001) / 50));
     let R = effectiveTarget - count50 * 50;
@@ -433,18 +465,28 @@
     let R2 = R - count5 * 5;
 
     let count10 = 0, count20 = 0;
-    if (count5 > 0 && R2 > 0.005){
+    if (count5 >= 5 && R2 > 0.005){
+      // genug 5er als Anker: 10€/20€ proportional dazu staffeln
       const a = 20 / count5, b = 10, c = -R2;
       const disc = b * b - 4 * a * c;
       const raw10 = disc >= 0 ? (-b + Math.sqrt(disc)) / (2 * a) : 0;
       count10 = Math.min(Math.max(0, Math.round(raw10)), counts[1], 15);
       count20 = Math.min(Math.max(0, Math.round((count10 * count10) / count5)), counts[2], 15);
     } else if (R2 > 0.005){
-      count10 = Math.min(Math.floor(R2 / 15), counts[1], 15);
-      count20 = Math.min(Math.floor((R2 - count10 * 10) / 20), counts[2], 15);
+      // zu wenige 5er als verlässlicher Anker (z.B. < 5 im Bestand): 10€/20€ ausgewogen auffüllen
+      let allocValue = [0, 0], cnt = [0, 0], remaining = R2, progress = true;
+      while (remaining > 0.005 && progress){
+        progress = false;
+        let cand = [0, 1].filter(idx => [10, 20][idx] <= remaining + 0.001 && cnt[idx] < Math.min(counts[idx + 1], 15));
+        if (cand.length === 0) break;
+        cand.sort((x, y) => (allocValue[x] - allocValue[y]) || ([10, 20][y] - [10, 20][x]));
+        const p = cand[0];
+        allocValue[p] += [10, 20][p]; cnt[p]++; remaining -= [10, 20][p]; progress = true;
+      }
+      count10 = cnt[0]; count20 = cnt[1];
     }
 
-    let keep = [count5, count10, count20, count50, 0];
+    let keep = [count5, count10, count20, count50, 0, 0]; // 5,10,20,50,100,200 — 100er/200er nie behalten
     let achieved = keep[0]*5 + keep[1]*10 + keep[2]*20 + keep[3]*50;
     let gap = effectiveTarget - achieved;
 
@@ -462,14 +504,65 @@
       else if (keep[3] < Math.min(counts[3], MAX_50) && 50 <= gap + 0.005){ keep[3]++; gap -= 50; }
       else break;
     }
-    // Feinschluss: fehlende Cent-/5er-Beträge mit zusätzlichen 5€-Noten schließen (nie unter Ziel bleiben)
-    let extra5 = 0;
-    while (gap > 0.005 && keep[0] < Math.min(counts[0], MAX_5)){
-      keep[0] += 1; gap -= 5; extra5 += 1;
+    // Feinschluss-Kaskade: bevorzugt 5€, weicht aber auf 10€/20€/50€ aus, wenn davon
+    // nicht mehr genug verfügbar sind — schließt die Lücke immer, nie eine Unterdeckung.
+    let extra = { 5: 0, 10: 0, 20: 0, 50: 0 };
+    while (gap > 0.005){
+      let cand = [0, 1, 2, 3].filter(i => keep[i] < Math.min(counts[i], maxKeepFor[i]));
+      if (cand.length === 0) break;
+      cand.sort((a, b) => noteValues[a] - noteValues[b]);
+      const pick = cand[0];
+      keep[pick] += 1; gap -= noteValues[pick]; extra[noteValues[pick]] += 1;
     }
+    // Optimierung: Überschuss (und damit die nötige Kleingeld-Entnahme) so klein wie möglich
+    // halten. In jedem Schritt die kleinstmögliche gültige Anpassung wählen — entweder eine
+    // vorhandene Note ganz entfernen, oder eine größere Note gegen eine zusätzliche 5€-Note
+    // tauschen (falls noch verfügbar). So wird eine 5€-Note immer zuerst fürs Runden genutzt,
+    // bevor auf Kleingeld zurückgegriffen wird — solange effectiveTarget nicht unterschritten wird.
+    let keptSumCheck = keep[0]*5 + keep[1]*10 + keep[2]*20 + keep[3]*50;
+    let improved = true;
+    while (improved){
+      improved = false;
+      let bestDelta = Infinity, bestAction = null;
+
+      // Option A: eine vorhandene Note komplett entfernen
+      for (let j = 0; j < 4; j++){
+        if (keep[j] > 0){
+          const delta = noteValues[j];
+          if (keptSumCheck - delta >= effectiveTarget - 0.005 && delta < bestDelta){
+            bestDelta = delta; bestAction = { type: 'remove', j };
+          }
+        }
+      }
+      // Option B: eine größere Note gegen eine zusätzliche 5€-Note tauschen
+      if (keep[0] < Math.min(counts[0], maxKeepFor[0])){
+        for (let j = 1; j < 4; j++){
+          if (keep[j] > 0){
+            const delta = noteValues[j] - 5;
+            if (keptSumCheck - delta >= effectiveTarget - 0.005 && delta < bestDelta){
+              bestDelta = delta; bestAction = { type: 'swap', j };
+            }
+          }
+        }
+      }
+
+      if (bestAction){
+        if (bestAction.type === 'remove'){
+          keep[bestAction.j] -= 1;
+          if (extra[noteValues[bestAction.j]] > 0) extra[noteValues[bestAction.j]] -= 1;
+        } else {
+          keep[bestAction.j] -= 1;
+          if (extra[noteValues[bestAction.j]] > 0) extra[noteValues[bestAction.j]] -= 1;
+          keep[0] += 1;
+        }
+        keptSumCheck -= bestDelta;
+        improved = true;
+      }
+    }
+    const extra5 = extra[5]; // fürs bestehende Status-Messaging beibehalten
 
     const keptSum = keep[0]*5 + keep[1]*10 + keep[2]*20 + keep[3]*50;
-    return { keep, gap, keptSum, extra5 };
+    return { keep, gap, keptSum, extra5, extra };
   }
 
   function calcEntnahme(baseSum, sumScheine, sumKlein){
@@ -512,10 +605,10 @@
       if (maxKeepable < target - 0.005){
         status = { type: 'warn', msg: `Mit den Vorgaben (keine 100 €, max. 3× 50 €, 5€-Reserve begrenzt) können höchstens ${fmt(maxKeepable)} in der Kasse gehalten werden — ${fmt(target - maxKeepable)} weniger als für 700 € nötig. Differenz über Rollen-/Kleingeld ausgleichen oder Limits anpassen.` };
       } else {
-        status = { type: 'warn', msg: `Es fehlt eine weitere 5€-Note zum Aufrunden — mit den gezählten Scheinen bleibt die Kasse um ${fmt(dist.gap)} unter 700 €.` };
+        status = { type: 'warn', msg: `Mit den gezählten Scheinen (keine Note mehr verfügbar) bleibt die Kasse um ${fmt(dist.gap)} unter 700 €.` };
       }
-    } else if (status.type === 'ok' && dist.extra5 > 0){
-      status = { type: 'ok', msg: `${fmt(keptSum)} Papiergeld bleiben in der Kasse (15× 5€-Reserve + ${dist.extra5}× zum Aufrunden). Die Aufrundung von ${fmt(keptSum - target)} wird über eine Kleingeld-Entnahme von ${fmt(kleingeldEntnahme)} ausgeglichen, damit die Kasse exakt 700,00 € enthält. ${fmt(removeSum)} Papiergeld werden als Gewinn entnommen.` };
+    } else if (status.type === 'ok' && (dist.extra[5] + dist.extra[10] + dist.extra[20] + dist.extra[50]) > 0){
+      status = { type: 'ok', msg: `${fmt(keptSum)} Papiergeld bleiben in der Kasse. Kleingeld-Entnahme: ${fmt(kleingeldEntnahme)}, damit die Kasse exakt 700,00 € enthält. ${fmt(removeSum)} Papiergeld werden als Gewinn entnommen.` };
     } else if (status.type === 'ok' && target > 0){
       status = { type: 'ok', msg: `${fmt(keptSum)} Papiergeld bleiben in der Kasse, ${fmt(removeSum)} werden als Gewinn entnommen.` };
     }
@@ -569,11 +662,36 @@
     const kleingeldRow = document.getElementById('f-kleingeld-row');
     document.getElementById('f-kleingeld-ueberschuss').textContent = fmt(entnahme.kleingeldEntnahme);
 
-    lastState = { sumRollen, sumKlein, sumScheine, sumB, ist, diff, entnahme, kassenNr };
+    const kassenbestandNachEntnahme = sumRollen + (sumKlein - entnahme.kleingeldEntnahme) + entnahme.keptSum;
+    const kontrolleEl = document.getElementById('f-kontrolle');
+    kontrolleEl.textContent = fmt(kassenbestandNachEntnahme);
+    kontrolleEl.classList.remove('diff-ok','diff-under');
+    kontrolleEl.classList.add(Math.abs(kassenbestandNachEntnahme - SOLL) < 0.005 ? 'diff-ok' : 'diff-under');
+
+    const dkkAmount = getDkkAmount();
+    document.getElementById('dkk-linesum').textContent = fmtKr(dkkAmount);
+    const dkkRow = document.getElementById('f-dkk-row');
+    if (dkkAmount > 0.005){
+      dkkRow.style.display = 'flex';
+      document.getElementById('f-dkk').textContent = fmtKr(dkkAmount);
+    } else {
+      dkkRow.style.display = 'none';
+    }
+
+    lastState = { sumRollen, sumKlein, sumScheine, sumB, ist, diff, entnahme, kassenNr, kassenbestandNachEntnahme, dkkAmount };
   }
 
   document.addEventListener('input', (e) => {
-    if (e.target.classList.contains('count-input')){
+    if (e.target.classList.contains('dkk-input')){
+      // Dezimalzahl erlauben (Komma oder Punkt, ein Trennzeichen)
+      let v = e.target.value.replace(/[^0-9,.]/g, '');
+      const firstSep = v.search(/[,.]/);
+      if (firstSep !== -1){
+        v = v.slice(0, firstSep + 1) + v.slice(firstSep + 1).replace(/[,.]/g, '');
+      }
+      e.target.value = v;
+      recalc();
+    } else if (e.target.classList.contains('count-input')){
       e.target.value = e.target.value.replace(/[^0-9]/g, '');
       recalc();
     }
@@ -621,7 +739,7 @@
     });
     if (!entnahmeRows) entnahmeRows = `<tr><td colspan="4" style="color:#999;">— kein Papiergeld erfasst —</td></tr>`;
 
-    document.title = `Kassenschluss_Kasse${s.kassenNr}_${dateFile}`;
+    document.title = `Kasse${s.kassenNr}-${dateFile}`;
 
     const kleingeldLine = `<div class="final-row sub"><span>davon Kleingeld-Entnahme</span><span>${fmt(s.entnahme.kleingeldEntnahme)}</span></div>`;
 
@@ -659,6 +777,8 @@
         <div class="final-row total"><span>Gewinn Kasse ${s.kassenNr}</span><span>${s.diff > 0 ? '+' : ''}${fmt(s.diff)}</span></div>
         <div class="final-row sub"><span>davon Papiergeld-Entnahme</span><span>${fmt(s.entnahme.removeSum)}</span></div>
         ${kleingeldLine}
+        <div class="final-row total" style="margin-top:6px;"><span>Kassenbestand nach Entnahme</span><span>${fmt(s.kassenbestandNachEntnahme)}</span></div>
+        ${s.dkkAmount > 0.005 ? `<div class="final-row sub"><span>DKK-Entnahme (Fremdwährung)</span><span>${fmtKr(s.dkkAmount)}</span></div>` : ''}
       </div>
 
       <div class="sig">
