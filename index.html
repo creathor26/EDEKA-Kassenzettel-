@@ -127,6 +127,31 @@
     box-shadow: 0 0 0 2px rgba(47,77,52,0.15);
   }
 
+  /* Kleingeld: Zählen/Wiegen */
+  table.klein-table td.denom{ width: 30%; }
+  table.klein-table td.count{ width: 39%; }
+  table.klein-table td.linesum{ width: 31%; }
+  .inwrap{ display:flex; gap:6px; align-items:center; }
+  .inwrap input.count-input{ min-width:0; flex:1 1 auto; }
+  button.unit-chip{
+    flex:0 0 auto; min-width:46px; min-height:40px;
+    padding: 6px;
+    border: 1px solid var(--paper-line);
+    background: var(--white);
+    color: var(--ink-soft);
+    border-radius: 6px;
+    font: 600 13px ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  button.unit-chip.on{ background: var(--edeka-yellow); border-color: var(--edeka-yellow); color: var(--green-deep); }
+  td.linesum .derived{ display:block; font-size: 11px; color: var(--ink-soft); }
+  .seg{ display:inline-flex; border:1px solid var(--green-deep); border-radius:8px; overflow:hidden; margin: 10px 4px 0; }
+  .seg button{
+    border:0; background:transparent; color:var(--green-deep);
+    min-height:40px; padding: 8px 18px;
+    font: 600 13px ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  .seg button.active{ background: var(--green-deep); color: var(--white); }
+
   /* Entnahme-Tabelle */
   table.entnahme td{ padding: 8px 4px; font-size: 14px; text-align:center; }
   table.entnahme td:first-child{ text-align:left; font-weight:600; }
@@ -269,7 +294,12 @@
       <h2>b) Kleingeld</h2>
       <span class="subtotal mono" id="sum-klein">0,00 €</span>
     </div>
-    <table><tbody id="body-klein"></tbody></table>
+    <div class="seg" role="group" aria-label="Kleingeld erfassen">
+      <button type="button" id="klein-mode-count" class="active">Zählen</button>
+      <button type="button" id="klein-mode-weigh">Wiegen</button>
+    </div>
+    <div class="section-hint" id="klein-weigh-hint" style="display:none;">Gezählte und gewogene Mengen werden je Münzsorte addiert und bleiben beim Umschalten erhalten — dieselben Münzen bitte nicht doppelt erfassen. Waage vorher tarieren; die Stückzahl wird aus dem Standardgewicht der Münze gerundet (bei großen Mengen wenige Stück Abweichung möglich). Mit dem Stk/g-Schalter neben dem Feld lässt sich jede Sorte einzeln umstellen.</div>
+    <table class="klein-table"><tbody id="body-klein"></tbody></table>
   </div>
 
   <div class="section" id="section-scheine">
@@ -358,15 +388,16 @@
     { label: "2 Euro",  unit: "Rolle à 25 Stk.", value: 50.00 },
   ];
 
+  // weight = offizielles Sollgewicht der Euro-Münze in Gramm (für den Wiege-Modus)
   const klein = [
-    { label: "1 Cent",  unit: "je Stück", value: 0.01 },
-    { label: "2 Cent",  unit: "je Stück", value: 0.02 },
-    { label: "5 Cent",  unit: "je Stück", value: 0.05 },
-    { label: "10 Cent", unit: "je Stück", value: 0.10 },
-    { label: "20 Cent", unit: "je Stück", value: 0.20 },
-    { label: "50 Cent", unit: "je Stück", value: 0.50 },
-    { label: "1 Euro",  unit: "je Stück", value: 1.00 },
-    { label: "2 Euro",  unit: "je Stück", value: 2.00 },
+    { label: "1 Cent",  unit: "je Stück", value: 0.01, weight: 2.30 },
+    { label: "2 Cent",  unit: "je Stück", value: 0.02, weight: 3.06 },
+    { label: "5 Cent",  unit: "je Stück", value: 0.05, weight: 3.92 },
+    { label: "10 Cent", unit: "je Stück", value: 0.10, weight: 4.10 },
+    { label: "20 Cent", unit: "je Stück", value: 0.20, weight: 5.74 },
+    { label: "50 Cent", unit: "je Stück", value: 0.50, weight: 7.80 },
+    { label: "1 Euro",  unit: "je Stück", value: 1.00, weight: 7.50 },
+    { label: "2 Euro",  unit: "je Stück", value: 2.00, weight: 8.50 },
   ];
 
   const scheine = [
@@ -383,6 +414,8 @@
   const BASELINE_5 = 15;
   const MAX_5 = 25;
   const MAX_50 = 3;
+  const MIN_50 = 1;                                  // mind. 1x 50€ bleibt (sofern vorhanden)
+  const GRUND_20 = 3, GRUND_10 = 4, GRUND_5 = 5;     // Kleinnoten-Grundstock
   const maxKeepFor = [MAX_5, 15, 15, MAX_50, 0, 0]; // 5, 10, 20, 50, 100, 200
 
   function fmt(n){
@@ -413,8 +446,102 @@
     });
   }
 
+  // ---- Kleingeld: Zählen oder Wiegen (je Münzsorte) ----
+  const kleinMode  = klein.map(() => 'count');                    // 'count' | 'weigh'
+  const kleinStash = klein.map(() => ({ count: '', weigh: '' })); // Eingaben je Modus merken
+
+  function parseGrams(v){
+    const g = parseFloat(String(v || '').replace(',', '.'));
+    return isNaN(g) || g < 0 ? 0 : g;
+  }
+  function coinCountFromGrams(grams, weight){
+    return Math.max(0, Math.round(grams / weight));
+  }
+  function fmtGrams(g){
+    return g.toLocaleString('de-DE', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+  }
+  // Dezimalzahl erlauben (Komma oder Punkt, nur ein Trennzeichen)
+  function sanitizeDecimal(v){
+    v = v.replace(/[^0-9,.]/g, '');
+    const firstSep = v.search(/[,.]/);
+    if (firstSep !== -1) v = v.slice(0, firstSep + 1) + v.slice(firstSep + 1).replace(/[,.]/g, '');
+    return v;
+  }
+
+  function applyKleinRowUI(i){
+    const weigh = kleinMode[i] === 'weigh';
+    const input = document.getElementById(`k-input-${i}`);
+    const chip = document.getElementById(`k-chip-${i}`);
+    input.setAttribute('inputmode', weigh ? 'decimal' : 'numeric');
+    input.setAttribute('placeholder', weigh ? '0 g' : '0');
+    chip.textContent = weigh ? 'g' : 'Stk';
+    chip.classList.remove('on');
+    if (weigh) chip.classList.add('on');
+    document.getElementById(`k-unit-${i}`).textContent = weigh
+      ? `${fmtGrams(klein[i].weight)} g je Münze`
+      : `${klein[i].unit} · ${fmt(klein[i].value)}`;
+  }
+
+  function updateKleinToggleUI(){
+    const all = kleinMode.every(m => m === 'weigh');
+    const none = kleinMode.every(m => m === 'count');
+    document.getElementById('klein-mode-count').classList.remove('active');
+    document.getElementById('klein-mode-weigh').classList.remove('active');
+    if (none) document.getElementById('klein-mode-count').classList.add('active');
+    if (all) document.getElementById('klein-mode-weigh').classList.add('active');
+    // Hinweis zeigen, sobald Wiegen im Spiel ist (aktiver Modus oder bereits gewogene Werte)
+    const weighUsed = !none || kleinStash.some(s => parseGrams(s.weigh) > 0);
+    document.getElementById('klein-weigh-hint').style.display = weighUsed ? 'block' : 'none';
+  }
+
+  function setKleinMode(i, mode){
+    if (kleinMode[i] === mode) return;
+    const input = document.getElementById(`k-input-${i}`);
+    kleinStash[i][kleinMode[i]] = input.value;   // aktuellen Wert des alten Modus merken
+    kleinMode[i] = mode;
+    input.value = kleinStash[i][mode];
+    applyKleinRowUI(i);
+  }
+
+  function setAllKleinMode(mode){
+    klein.forEach((item, i) => setKleinMode(i, mode));
+    updateKleinToggleUI();
+    recalc();
+  }
+
+  function resetKlein(){
+    klein.forEach((item, i) => {
+      kleinStash[i] = { count: '', weigh: '' };
+      kleinMode[i] = 'count';
+      applyKleinRowUI(i);
+    });
+    updateKleinToggleUI();
+  }
+
+  function buildKleinRows(){
+    const tbody = document.getElementById('body-klein');
+    klein.forEach((item, i) => {
+      const tr = document.createElement('tr');
+      tr.className = 'row';
+      tr.innerHTML = `
+        <td class="denom">${item.label}<span class="unitval" id="k-unit-${i}">${item.unit} · ${fmt(item.value)}</span></td>
+        <td class="count"><div class="inwrap">
+          <input class="count-input" type="text" inputmode="numeric" pattern="[0-9]*" placeholder="0" id="k-input-${i}">
+          <button type="button" class="unit-chip" id="k-chip-${i}" aria-label="Zählen oder Wiegen umschalten">Stk</button>
+        </div></td>
+        <td class="linesum mono"><span id="k-linesum-${i}">0,00 €</span><span class="derived" id="k-derived-${i}"></span></td>
+      `;
+      tbody.appendChild(tr);
+      document.getElementById(`k-chip-${i}`).addEventListener('click', () => {
+        setKleinMode(i, kleinMode[i] === 'count' ? 'weigh' : 'count');
+        updateKleinToggleUI();
+        recalc();
+      });
+    });
+  }
+
   buildRows(rollen, 'body-rollen', 'r');
-  buildRows(klein, 'body-klein', 'k');
+  buildKleinRows();
   buildRows(scheine, 'body-scheine', 's');
 
   const bodyEntnahme = document.getElementById('body-entnahme');
@@ -430,7 +557,22 @@
     bodyEntnahme.appendChild(tr);
   });
 
+  // Kleingeld je Sorte: gezählte Stück + aus Gramm errechnete Stück (beide Erfassungsarten
+  // bleiben beim Umschalten erhalten und werden addiert). Das sichtbare Feld gehört zum
+  // aktiven Modus, der Wert des anderen Modus liegt im Zwischenspeicher.
+  function kleinParts(i){
+    const live = document.getElementById(`k-input-${i}`).value;
+    const raw = kleinMode[i] === 'count'
+      ? { count: live, weigh: kleinStash[i].weigh }
+      : { count: kleinStash[i].count, weigh: live };
+    const counted = Math.max(0, parseInt(raw.count, 10) || 0);
+    const grams = parseGrams(raw.weigh);
+    const weighed = coinCountFromGrams(grams, klein[i].weight);
+    return { counted, grams, weighed, total: counted + weighed };
+  }
+
   function getCount(prefix, i){
+    if (prefix === 'k') return kleinParts(i).total;
     const input = document.getElementById(`${prefix}-input-${i}`);
     const n = parseInt(input.value, 10);
     return isNaN(n) || n < 0 ? 0 : n;
@@ -443,6 +585,15 @@
       const lineSum = count * item.value;
       sum += lineSum;
       document.getElementById(`${prefix}-linesum-${i}`).textContent = fmt(lineSum);
+      if (prefix === 'k'){
+        // Aufschlüsselung, damit auch der Anteil der gerade nicht angezeigten Erfassungsart sichtbar bleibt
+        const p = kleinParts(i);
+        let line = '';
+        if (p.counted > 0 && p.weighed > 0) line = `${p.counted} gez. + ≈${p.weighed} gew.`;
+        else if (p.weighed > 0) line = `≈ ${p.weighed} Stk. gewogen`;
+        else if (p.counted > 0 && kleinMode[i] === 'weigh') line = `${p.counted} Stk. gezählt`;
+        document.getElementById(`k-derived-${i}`).textContent = line;
+      }
     });
     return sum;
   }
@@ -457,8 +608,8 @@
   //   anschließend die Kleingeld-Entnahme (siehe calcEntnahme)
   const noteValues = scheine.map(s => s.value);
 
-  function distributeKeep(counts, effectiveTarget){
-    let count50 = Math.min(MAX_50, counts[3], Math.floor((effectiveTarget + 0.001) / 50));
+  // Kern der Verteilung für eine vorgegebene Start-Anzahl 50er (count50).
+  function distributeCore(counts, effectiveTarget, count50){
     let R = effectiveTarget - count50 * 50;
 
     let count5 = Math.min(BASELINE_5, counts[0], Math.floor((R + 0.001) / 5));
@@ -490,11 +641,13 @@
     let achieved = keep[0]*5 + keep[1]*10 + keep[2]*20 + keep[3]*50;
     let gap = effectiveTarget - achieved;
 
+    const min50 = Math.min(MIN_50, counts[3], Math.floor((effectiveTarget + 0.001) / 50)); // mind. 1x 50€ bleibt
+
     // Überschuss aus der Proportionsschätzung abbauen (größte Note zuerst)
     while (gap < -0.005){
       if (keep[2] > 0){ keep[2]--; gap += 20; }
       else if (keep[1] > 0){ keep[1]--; gap += 10; }
-      else if (keep[3] > 0){ keep[3]--; gap += 50; }
+      else if (keep[3] > min50){ keep[3]--; gap += 50; }
       else break;
     }
     // verbleibende Lücke ≥10€ mit 10er/20er/50er auffüllen (im Rahmen der Kapazität)
@@ -525,9 +678,9 @@
       improved = false;
       let bestDelta = Infinity, bestAction = null;
 
-      // Option A: eine vorhandene Note komplett entfernen
+      // Option A: eine vorhandene Note komplett entfernen (50er nie unter das Minimum)
       for (let j = 0; j < 4; j++){
-        if (keep[j] > 0){
+        if (keep[j] > (j === 3 ? min50 : 0)){
           const delta = noteValues[j];
           if (keptSumCheck - delta >= effectiveTarget - 0.005 && delta < bestDelta){
             bestDelta = delta; bestAction = { type: 'remove', j };
@@ -537,7 +690,7 @@
       // Option B: eine größere Note gegen eine zusätzliche 5€-Note tauschen
       if (keep[0] < Math.min(counts[0], maxKeepFor[0])){
         for (let j = 1; j < 4; j++){
-          if (keep[j] > 0){
+          if (keep[j] > (j === 3 ? min50 : 0)){
             const delta = noteValues[j] - 5;
             if (keptSumCheck - delta >= effectiveTarget - 0.005 && delta < bestDelta){
               bestDelta = delta; bestAction = { type: 'swap', j };
@@ -563,6 +716,35 @@
 
     const keptSum = keep[0]*5 + keep[1]*10 + keep[2]*20 + keep[3]*50;
     return { keep, gap, keptSum, extra5, extra };
+  }
+
+  // Fehlbetrag zum Kleinnoten-Grundstock (3x 20€, 4x 10€, 5x 5€) in Euro.
+  function grundstockShortfall(keep){
+    return Math.max(0, GRUND_20 - keep[2]) * 20
+         + Math.max(0, GRUND_10 - keep[1]) * 10
+         + Math.max(0, GRUND_5  - keep[0]) * 5;
+  }
+
+  // Wählt die Anzahl 50er: so viele wie erlaubt (max. 3) — aber weniger (min. 1), wenn dadurch
+  // mehr 20er/10er/5er im Bestand bleiben können, um den Grundstock 3x20/4x10/5x5 zu erreichen.
+  // Das Ziel (700 €) wird dabei nie unterschritten; bei Gleichstand gewinnt die größere 50er-Zahl.
+  function distributeKeep(counts, effectiveTarget){
+    const hi = Math.min(MAX_50, counts[3], Math.floor((effectiveTarget + 0.001) / 50));
+    const lo = Math.min(MIN_50, hi);
+
+    let best = null;
+    for (let c50 = hi; c50 >= lo; c50--){
+      const cand = distributeCore(counts, effectiveTarget, c50);
+      const valid = cand.gap <= 0.005;
+      const shortfall = grundstockShortfall(cand.keep);
+      cand._score = { valid, shortfall };
+      if (!best){ best = cand; continue; }
+      const b = best._score;
+      if (valid && !b.valid) { best = cand; continue; }
+      if (!valid && b.valid) { continue; }
+      if (shortfall < b.shortfall - 0.005) best = cand; // weniger Fehlbetrag → weniger 50er
+    }
+    return best;
   }
 
   function calcEntnahme(baseSum, sumScheine, sumKlein){
@@ -682,14 +864,10 @@
   }
 
   document.addEventListener('input', (e) => {
-    if (e.target.classList.contains('dkk-input')){
-      // Dezimalzahl erlauben (Komma oder Punkt, ein Trennzeichen)
-      let v = e.target.value.replace(/[^0-9,.]/g, '');
-      const firstSep = v.search(/[,.]/);
-      if (firstSep !== -1){
-        v = v.slice(0, firstSep + 1) + v.slice(firstSep + 1).replace(/[,.]/g, '');
-      }
-      e.target.value = v;
+    const kIdx = /^k-input-(\d+)$/.exec(e.target.id || '');
+    const isWeighInput = kIdx && kleinMode[parseInt(kIdx[1], 10)] === 'weigh';
+    if (e.target.classList.contains('dkk-input') || isWeighInput){
+      e.target.value = sanitizeDecimal(e.target.value);
       recalc();
     } else if (e.target.classList.contains('count-input')){
       e.target.value = e.target.value.replace(/[^0-9]/g, '');
@@ -701,8 +879,12 @@
 
   document.getElementById('btn-reset').addEventListener('click', () => {
     document.querySelectorAll('.count-input').forEach(inp => inp.value = '');
+    resetKlein();
     recalc();
   });
+
+  document.getElementById('klein-mode-count').addEventListener('click', () => setAllKleinMode('count'));
+  document.getElementById('klein-mode-weigh').addEventListener('click', () => setAllKleinMode('weigh'));
 
   function setDate(){
     const now = new Date();
@@ -719,14 +901,23 @@
   function buildPrintSummary(){
     const s = lastState;
     const { now } = setDate();
-    const dateFile = now.toLocaleDateString('de-DE').split('.').reverse().join('-');
+    const p2 = n => String(n).padStart(2, '0');
+    const dateFile = `${now.getFullYear()}-${p2(now.getMonth()+1)}-${p2(now.getDate())}-${p2(now.getHours())}-${p2(now.getMinutes())}`;
 
     function rowsFor(list, prefix){
       let html = '';
       list.forEach((item, i) => {
         const count = getCount(prefix, i);
         if (count === 0) return;
-        html += `<tr><td>${item.label}</td><td class="num">${count}</td><td class="num">${fmt(count * item.value)}</td></tr>`;
+        let label = item.label;
+        if (prefix === 'k'){
+          const p = kleinParts(i);
+          if (p.weighed > 0){
+            const teil = p.counted > 0 ? `gezählt ${p.counted} + ` : '';
+            label += ` <span style="color:#777;font-size:11px;">(${teil}gewogen: ${fmtGrams(p.grams)} g ≈ ${p.weighed} Stk.)</span>`;
+          }
+        }
+        html += `<tr><td>${label}</td><td class="num">${count}</td><td class="num">${fmt(count * item.value)}</td></tr>`;
       });
       return html || `<tr><td colspan="3" style="color:#999;">— keine Stückzahl erfasst —</td></tr>`;
     }
