@@ -227,7 +227,7 @@
 
   @media print{
     header, .footer, .actions, .section-hint, .entnahme-status { display:none !important; }
-    .section#section-rollen, .section#section-klein, .section#section-scheine, .section#section-dkk, .section#section-entnahme,
+    .section#section-rollen, .section#section-klein, .section#section-scheine, .section#section-bundle, .section#section-dkk, .section#section-entnahme,
     input.count-input { display:none !important; }
     main{ padding: 0; max-width: 100%; }
     body{ background: #fff; }
@@ -310,9 +310,29 @@
     <table><tbody id="body-scheine"></tbody></table>
   </div>
 
+  <div class="section" id="section-bundle">
+    <div class="section-title">
+      <h2>c) Vorgezählte Banknoten</h2>
+      <span class="subtotal mono" id="sum-bundle">0,00 €</span>
+    </div>
+    <div class="section-hint">Gebündelte, bereits gezählte Banknoten (z. B. unten in der Kasse). Sie werden zum Kassenergebnis addiert, nicht auf den 700-€-Bestand angerechnet und immer vollständig entnommen.</div>
+    <table><tbody>
+      <tr class="row">
+        <td class="denom">Bündel<span class="unitval">à 1.000 €</span></td>
+        <td class="count"><input class="count-input" type="text" inputmode="numeric" placeholder="0" id="bundle-count"></td>
+        <td class="linesum mono" id="bundle-count-linesum">0,00 €</td>
+      </tr>
+      <tr class="row">
+        <td class="denom">Sonstiger Betrag<span class="unitval">Gesamtbetrag in €</span></td>
+        <td class="count"><input class="count-input dec-input" type="text" inputmode="decimal" placeholder="0" id="bundle-other"></td>
+        <td class="linesum mono" id="bundle-other-linesum">0,00 €</td>
+      </tr>
+    </tbody></table>
+  </div>
+
   <div class="section" id="section-dkk">
     <div class="section-title">
-      <h2>c) Fremdwährung (DKK)</h2>
+      <h2>d) Fremdwährung (DKK)</h2>
     </div>
     <div class="section-hint">Eingenommene dänische Kronen werden nicht auf den 700-€-Bestand angerechnet und immer vollständig entnommen.</div>
     <table><tbody>
@@ -358,11 +378,13 @@
   <div class="footer-inner">
     <div class="footer-row"><span class="lbl">Rollengeld (a)</span><span class="mono" id="f-rollen">0,00 €</span></div>
     <div class="footer-row"><span class="lbl">Kleingeld + Scheine (b)</span><span class="mono" id="f-b">0,00 €</span></div>
+    <div class="footer-row" id="f-bundle-row" style="display:none;"><span class="lbl">Vorgezählte Banknoten (c)</span><span class="mono" id="f-bundle">0,00 €</span></div>
     <div class="footer-row total"><span class="lbl">Ist-Bestand</span><span class="mono" id="f-ist">0,00 €</span></div>
     <div class="footer-row"><span class="lbl">Soll-Bestand</span><span class="mono">700,00 €</span></div>
     <div class="footer-row total"><span class="lbl" id="f-gewinn-label">Gewinn Kasse 1</span><span class="mono" id="f-diff">0,00 €</span></div>
     <div class="footer-row sub" id="f-kleingeld-row"><span class="lbl">davon Kleingeld-Entnahme</span><span class="mono" id="f-kleingeld-ueberschuss">0,00 €</span></div>
     <div class="footer-row sub"><span class="lbl">davon Papiergeld-Entnahme</span><span class="mono" id="f-papier-entnahme">0,00 €</span></div>
+    <div class="footer-row sub" id="f-bundle-entnahme-row" style="display:none;"><span class="lbl">davon vorgezählte Banknoten</span><span class="mono" id="f-bundle-entnahme">0,00 €</span></div>
     <div class="footer-row total" style="margin-top:8px;"><span class="lbl">Kassenbestand nach Entnahme</span><span class="mono" id="f-kontrolle">0,00 €</span></div>
     <div class="footer-row sub" id="f-dkk-row" style="display:none;"><span class="lbl">DKK-Entnahme (Fremdwährung)</span><span class="mono" id="f-dkk">0,00 kr.</span></div>
   </div>
@@ -424,6 +446,13 @@
 
   function fmtKr(n){
     return n.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " kr.";
+  }
+
+  function getBundleAmount(){
+    const n = parseInt((document.getElementById('bundle-count').value || '').replace(/[^0-9]/g, ''), 10) || 0;
+    const raw = parseFloat((document.getElementById('bundle-other').value || '').replace(',', '.'));
+    const other = isNaN(raw) || raw < 0 ? 0 : raw;
+    return { count: n, bundles: n * 1000, other, total: n * 1000 + other };
   }
 
   function getDkkAmount(){
@@ -892,12 +921,21 @@
     const sumKlein = calcGroup(klein, 'k');
     const sumScheine = calcGroup(scheine, 's');
     const sumB = sumKlein + sumScheine;
-    const ist = sumRollen + sumB;
+    const bundle = getBundleAmount();
+    const ist = sumRollen + sumB + bundle.total;
     const diff = ist - SOLL;
 
     document.getElementById('sum-rollen').textContent = fmt(sumRollen);
     document.getElementById('sum-klein').textContent = fmt(sumKlein);
     document.getElementById('sum-scheine').textContent = fmt(sumScheine);
+
+    document.getElementById('sum-bundle').textContent = fmt(bundle.total);
+    document.getElementById('bundle-count-linesum').textContent = fmt(bundle.bundles);
+    document.getElementById('bundle-other-linesum').textContent = fmt(bundle.other);
+    document.getElementById('f-bundle-row').style.display = bundle.total > 0.005 ? 'flex' : 'none';
+    document.getElementById('f-bundle-entnahme-row').style.display = bundle.total > 0.005 ? 'flex' : 'none';
+    document.getElementById('f-bundle').textContent = fmt(bundle.total);
+    document.getElementById('f-bundle-entnahme').textContent = fmt(bundle.total);
 
     document.getElementById('f-rollen').textContent = fmt(sumRollen);
     document.getElementById('f-b').textContent = fmt(sumB);
@@ -935,13 +973,13 @@
       dkkRow.style.display = 'none';
     }
 
-    lastState = { sumRollen, sumKlein, sumScheine, sumB, ist, diff, entnahme, kassenNr, kassenbestandNachEntnahme, dkkAmount };
+    lastState = { sumRollen, sumKlein, sumScheine, sumB, bundle, ist, diff, entnahme, kassenNr, kassenbestandNachEntnahme, dkkAmount };
   }
 
   document.addEventListener('input', (e) => {
     const kIdx = /^k-input-(\d+)$/.exec(e.target.id || '');
     const isWeighInput = kIdx && kleinMode[parseInt(kIdx[1], 10)] === 'weigh';
-    if (e.target.classList.contains('dkk-input') || isWeighInput){
+    if (e.target.classList.contains('dkk-input') || e.target.classList.contains('dec-input') || isWeighInput){
       e.target.value = sanitizeDecimal(e.target.value);
       recalc();
     } else if (e.target.classList.contains('count-input')){
@@ -1028,6 +1066,13 @@
         <tr class="subtotal"><td>Zwischensumme</td><td></td><td class="num">${fmt(s.sumScheine)}</td></tr>
       </table>
 
+      ${s.bundle.total > 0.005 ? `<h2>c) Vorgezählte Banknoten</h2>
+      <table>
+        ${s.bundle.bundles > 0 ? `<tr><td>${s.bundle.count} Bündel à 1.000 €</td><td></td><td class="num">${fmt(s.bundle.bundles)}</td></tr>` : ''}
+        ${s.bundle.other > 0.005 ? `<tr><td>Sonstiger vorgezählter Betrag</td><td></td><td class="num">${fmt(s.bundle.other)}</td></tr>` : ''}
+        <tr class="subtotal"><td>Zwischensumme</td><td></td><td class="num">${fmt(s.bundle.total)}</td></tr>
+      </table>` : ''}
+
       <h2>Entnahme-Vorschlag</h2>
       <table>
         <tr><td style="font-weight:700;">Nennwert</td><td class="num" style="font-weight:700;">Vorh.</td><td class="num" style="font-weight:700;">Bleibt</td><td class="num" style="font-weight:700;">Entnahme</td></tr>
@@ -1038,10 +1083,12 @@
       <div class="final-box">
         <div class="final-row"><span>Rollengeld (a)</span><span>${fmt(s.sumRollen)}</span></div>
         <div class="final-row"><span>Kleingeld + Papiergeld (b)</span><span>${fmt(s.sumB)}</span></div>
+        ${s.bundle.total > 0.005 ? `<div class="final-row"><span>Vorgezählte Banknoten (c)</span><span>${fmt(s.bundle.total)}</span></div>` : ''}
         <div class="final-row total"><span>Ist-Bestand Kasse ${s.kassenNr}</span><span>${fmt(s.ist)}</span></div>
         <div class="final-row"><span>Soll-Bestand</span><span>700,00 €</span></div>
         <div class="final-row total"><span>Gewinn Kasse ${s.kassenNr}</span><span>${s.diff > 0 ? '+' : ''}${fmt(s.diff)}</span></div>
         <div class="final-row sub"><span>davon Papiergeld-Entnahme</span><span>${fmt(s.entnahme.removeSum)}</span></div>
+        ${s.bundle.total > 0.005 ? `<div class="final-row sub"><span>davon vorgezählte Banknoten</span><span>${fmt(s.bundle.total)}</span></div>` : ''}
         ${kleingeldLine}
         <div class="final-row total" style="margin-top:6px;"><span>Kassenbestand nach Entnahme</span><span>${fmt(s.kassenbestandNachEntnahme)}</span></div>
         ${s.dkkAmount > 0.005 ? `<div class="final-row sub"><span>DKK-Entnahme (Fremdwährung)</span><span>${fmtKr(s.dkkAmount)}</span></div>` : ''}
