@@ -609,10 +609,15 @@
   const noteValues = scheine.map(s => s.value);
 
   // Kern der Verteilung für eine vorgegebene Start-Anzahl 50er (count50).
-  function distributeCore(counts, effectiveTarget, count50){
+  function distributeCore(counts, effectiveTarget, count50, useFloor){
     let R = effectiveTarget - count50 * 50;
 
-    let count5 = Math.min(BASELINE_5, counts[0], Math.floor((R + 0.001) / 5));
+    // 5er: Grundstock (5 Stk.) hat Vorrang; die 5er-Reserve (bis 15) wird nur aufgebaut, soweit nach
+    // Reservierung des 20er-/10er-Grundstocks (3x20, 4x10) noch Budget übrig ist.
+    const reserve1020 = Math.min(counts[2], GRUND_20) * 20 + Math.min(counts[1], GRUND_10) * 10;
+    const fivesMin = Math.min(GRUND_5, counts[0], Math.floor((R + 0.001) / 5));
+    const fivesRes = Math.min(BASELINE_5, counts[0], Math.floor((Math.max(0, R - reserve1020) + 0.001) / 5));
+    let count5 = Math.max(fivesMin, fivesRes);
     let R2 = R - count5 * 5;
 
     let count10 = 0, count20 = 0;
@@ -637,7 +642,15 @@
       count10 = cnt[0]; count20 = cnt[1];
     }
 
-    let keep = [count5, count10, count20, count50, 0, 0]; // 5,10,20,50,100,200 — 100er/200er nie behalten
+    // Grundstock-Untergrenzen (3x20, 4x10, 5x5): nur wenn sie zusammen mit den 50ern ins Budget passen
+    // useFloor 2: zusätzlich Staffelung 5er > 10er > 20er > 50er (jeweils mind. eine Note mehr)
+    let g20 = GRUND_20, g10 = GRUND_10, g5 = GRUND_5;
+    if (useFloor === 2){ g20 = Math.max(g20, count50 + 1); g10 = Math.max(g10, g20 + 1); g5 = Math.max(g5, g10 + 1); }
+    const floors = [Math.min(g5, counts[0]), Math.min(g10, counts[1]), Math.min(g20, counts[2]), 0];
+    const floorSum = floors[0]*5 + floors[1]*10 + floors[2]*20 + count50*50;
+    const useF = !!useFloor && floorSum <= effectiveTarget + 0.005;
+    if (!useF) floors.fill(0);
+    let keep = [Math.max(count5, floors[0]), Math.max(count10, floors[1]), Math.max(count20, floors[2]), count50, 0, 0]; // 5,10,20,50,100,200 — 100er/200er nie behalten
     let achieved = keep[0]*5 + keep[1]*10 + keep[2]*20 + keep[3]*50;
     let gap = effectiveTarget - achieved;
 
@@ -645,8 +658,8 @@
 
     // Überschuss aus der Proportionsschätzung abbauen (größte Note zuerst)
     while (gap < -0.005){
-      if (keep[2] > 0){ keep[2]--; gap += 20; }
-      else if (keep[1] > 0){ keep[1]--; gap += 10; }
+      if (keep[2] > floors[2]){ keep[2]--; gap += 20; }
+      else if (keep[1] > floors[1]){ keep[1]--; gap += 10; }
       else if (keep[3] > min50){ keep[3]--; gap += 50; }
       else break;
     }
@@ -680,7 +693,7 @@
 
       // Option A: eine vorhandene Note komplett entfernen (50er nie unter das Minimum)
       for (let j = 0; j < 4; j++){
-        if (keep[j] > (j === 3 ? min50 : 0)){
+        if (keep[j] > (j === 3 ? min50 : floors[j])){
           const delta = noteValues[j];
           if (keptSumCheck - delta >= effectiveTarget - 0.005 && delta < bestDelta){
             bestDelta = delta; bestAction = { type: 'remove', j };
@@ -690,7 +703,7 @@
       // Option B: eine größere Note gegen eine zusätzliche 5€-Note tauschen
       if (keep[0] < Math.min(counts[0], maxKeepFor[0])){
         for (let j = 1; j < 4; j++){
-          if (keep[j] > (j === 3 ? min50 : 0)){
+          if (keep[j] > (j === 3 ? min50 : floors[j])){
             const delta = noteValues[j] - 5;
             if (keptSumCheck - delta >= effectiveTarget - 0.005 && delta < bestDelta){
               bestDelta = delta; bestAction = { type: 'swap', j };
@@ -728,21 +741,83 @@
   // Wählt die Anzahl 50er: so viele wie erlaubt (max. 3) — aber weniger (min. 1), wenn dadurch
   // mehr 20er/10er/5er im Bestand bleiben können, um den Grundstock 3x20/4x10/5x5 zu erreichen.
   // Das Ziel (700 €) wird dabei nie unterschritten; bei Gleichstand gewinnt die größere 50er-Zahl.
+  // Optimierte Wahl: durchsucht alle zulässigen Kombinationen (5er/10er/20er/50er) und nimmt die beste.
+  // Reihenfolge der Kriterien:
+  //  0. Ziel erreicht und Überschuss (= Kleingeld-Entnahme) minimal -> 5er werden zum Runden genutzt
+  //  1. Grundstock 3x20 / 4x10 / 5x5
+  //  2. Staffelung 5er > 10er > 20er > 50er (so wenige Verstöße wie möglich)
+  //  3. mehr 50er (bis 3)
+  //  4. gleichmäßige Abstände: 5er ca. 1,6x 10er, 10er ca. 2x 20er, 20er ca. 1,5x 50er
+  // Gibt null zurück, wenn das Ziel mit den Vorgaben nicht erreichbar ist (dann greift die alte Logik).
+  const SMOOTH_RATIO = [Math.log(1.6), Math.log(2.0), Math.log(1.5)]; // Ziel-Verhältnis 5:10, 10:20, 20:50
+  function distributeOptimal(counts, T){
+    if (T <= 0.005) return null;
+    const m5 = Math.min(counts[0], MAX_5), m10 = Math.min(counts[1], 15), m20 = Math.min(counts[2], 15);
+    const hi50 = Math.min(MAX_50, counts[3]);
+    const min50 = Math.min(MIN_50, counts[3], Math.floor((T + 0.001) / 50));
+    const feas = [];
+    let minOver = Infinity;
+    for (let k50 = min50; k50 <= hi50; k50++){
+      for (let k20 = 0; k20 <= m20; k20++){
+        for (let k10 = 0; k10 <= m10; k10++){
+          const base = k50 * 50 + k20 * 20 + k10 * 10;
+          if (base > T + 4.995 + 0) { if (base - T > minOver + 0.005) break; }
+          const need = T - base;
+          const k5 = need <= 0 ? 0 : Math.ceil((need - 0.005) / 5);
+          if (k5 > m5) continue;
+          const sum = base + k5 * 5, over = sum - T;
+          if (over < -0.005) continue;
+          if (over < minOver) minOver = over;
+          feas.push([k5, k10, k20, k50, over]);
+        }
+      }
+    }
+    if (!feas.length) return null;
+    let best = null, bestKey = null;
+    for (const f of feas){
+      if (f[4] > minOver + 0.005) continue;
+      const k = f;
+      const order = (k[0] <= k[1] ? 1 : 0) + (k[1] <= k[2] ? 1 : 0) + (k[2] <= k[3] ? 1 : 0);
+      const sf = grundstockShortfall(k);
+      const d = (a, b, r) => Math.log((a + 1) / (b + 1)) - SMOOTH_RATIO[r];
+      const smooth = d(k[0], k[1], 0) ** 2 + d(k[1], k[2], 1) ** 2 + d(k[2], k[3], 2) ** 2;
+      const key = [sf, order, -k[3], smooth];
+      if (!bestKey || key.some((v, i) => { for (let j = 0; j < i; j++) if (Math.abs(key[j] - bestKey[j]) > 1e-9) return false; return v < bestKey[i] - 1e-9; })){
+        best = f; bestKey = key;
+      }
+    }
+    const keep = [best[0], best[1], best[2], best[3], 0, 0];
+    const keptSum = keep[0]*5 + keep[1]*10 + keep[2]*20 + keep[3]*50;
+    const over = keptSum - T;
+    return { keep, gap: 0, keptSum, extra5: over > 0.005 ? 1 : 0, extra: { 5: over > 0.005 ? 1 : 0, 10: 0, 20: 0, 50: 0 } };
+  }
+
   function distributeKeep(counts, effectiveTarget){
+    const opt = distributeOptimal(counts, effectiveTarget);
+    if (opt) return opt;
     const hi = Math.min(MAX_50, counts[3], Math.floor((effectiveTarget + 0.001) / 50));
     const lo = Math.min(MIN_50, hi);
 
     let best = null;
     for (let c50 = hi; c50 >= lo; c50--){
-      const cand = distributeCore(counts, effectiveTarget, c50);
-      const valid = cand.gap <= 0.005;
-      const shortfall = grundstockShortfall(cand.keep);
-      cand._score = { valid, shortfall };
-      if (!best){ best = cand; continue; }
-      const b = best._score;
-      if (valid && !b.valid) { best = cand; continue; }
-      if (!valid && b.valid) { continue; }
-      if (shortfall < b.shortfall - 0.005) best = cand; // weniger Fehlbetrag → weniger 50er
+      for (const useFloor of [2, 1, 0]){
+        const cand = distributeCore(counts, effectiveTarget, c50, useFloor);
+        const valid = cand.gap <= 0.005;
+        const shortfall = grundstockShortfall(cand.keep);
+        const over = Math.max(0, cand.keptSum - effectiveTarget); // Überschuss = nötige Kleingeld-Entnahme
+        const k = cand.keep;
+        const order = (k[0] <= k[1] ? 1 : 0) + (k[1] <= k[2] ? 1 : 0) + (k[2] <= k[3] ? 1 : 0); // Verstöße gegen 5er>10er>20er>50er
+        cand._score = { valid, shortfall, over, order };
+        if (!best){ best = cand; continue; }
+        const b = best._score;
+        if (valid && !b.valid) { best = cand; continue; }
+        if (!valid && b.valid) { continue; }
+        if (order < b.order) best = cand;                                 // sauberere Staffelung 5er>10er>20er>50er
+        else if (order > b.order) continue;
+        else if (shortfall < b.shortfall - 0.005) best = cand;            // weniger Fehlbetrag zum Grundstock
+        else if (Math.abs(shortfall - b.shortfall) <= 0.005 && over < b.over - 5.005) best = cand; // sonst: deutlich weniger Kleingeld-Entnahme
+        // bei Gleichstand bleibt die frühere Wahl (mehr 50er)
+      }
     }
     return best;
   }
